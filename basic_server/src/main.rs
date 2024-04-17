@@ -1,8 +1,23 @@
+mod repository;
+use crate::repository::repository::ImageRepository;
+
 use axum::extract::State;
-use axum::routing::get;
+use axum::response::Html;
+use axum::routing::{get, post};
 use axum::Router;
 use dotenv;
 use sqlx::{Pool, Row, Sqlite};
+use std::sync::Arc;
+
+struct AppState {
+    db_pool: Pool<Sqlite>,
+}
+
+impl AppState {
+    fn new(db_pool: Pool<Sqlite>) -> Arc<Self> {
+        Arc::new(Self { db_pool })
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -11,7 +26,12 @@ async fn main() -> anyhow::Result<()> {
     let pool = sqlx::SqlitePool::connect(&db_url).await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
 
-    let app = Router::new().route("/", get(test).with_state(pool));
+    let app_state = AppState::new(pool);
+
+    let app = Router::new()
+        .route("/", get(index_page))
+        .route("/image", get(count_images))
+        .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     axum::serve(listener, app).await.unwrap();
@@ -19,11 +39,12 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn test(State(pool): State<Pool<Sqlite>>) -> String {
-    let result = sqlx::query("SELECT COUNT(id) FROM images")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    let count = result.get::<i64, _>(0);
-    format!("{count} images in the database")
+async fn index_page() -> Html<String> {
+    let path = std::path::Path::new("./src/templates/index.html");
+    let content = tokio::fs::read_to_string(&path).await.unwrap();
+    Html(content)
+}
+
+async fn count_images<T: ImageRepository>(State(image_repository): State<Arc<T>>) -> String {
+    image_repository.count_images().await
 }
