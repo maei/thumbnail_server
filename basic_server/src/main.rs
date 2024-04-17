@@ -1,11 +1,14 @@
 mod repository;
-use crate::repository::repository::ImageRepository;
+mod routes;
 
-use axum::extract::State;
+use crate::repository::image_reposiotry::ImageRepository;
+use crate::routes::image_routes::image_routes;
+
 use axum::response::Html;
 use axum::routing::{get, post};
 use axum::Router;
 use dotenv;
+use futures::SinkExt;
 use sqlx::{Pool, Row, Sqlite};
 use std::sync::Arc;
 
@@ -27,11 +30,9 @@ async fn main() -> anyhow::Result<()> {
     sqlx::migrate!("./migrations").run(&pool).await?;
 
     let app_state = AppState::new(pool);
-
     let app = Router::new()
         .route("/", get(index_page))
-        .route("/image", get(count_images))
-        .with_state(app_state);
+        .merge(image_routes(app_state.clone()));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     axum::serve(listener, app).await.unwrap();
@@ -45,6 +46,6 @@ async fn index_page() -> Html<String> {
     Html(content)
 }
 
-async fn count_images<T: ImageRepository>(State(image_repository): State<Arc<T>>) -> String {
-    image_repository.count_images().await
+async fn test() -> String {
+    "".to_string()
 }

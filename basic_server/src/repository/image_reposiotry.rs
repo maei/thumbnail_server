@@ -1,10 +1,12 @@
 use crate::AppState;
-use sqlx::{Row};
-
+use async_trait::async_trait;
+use sqlx::Row;
+#[async_trait]
 pub trait ImageRepository: Send + Sync + 'static {
     async fn count_images(&self) -> String;
 }
 
+#[async_trait]
 impl ImageRepository for AppState {
     async fn count_images(&self) -> String {
         let result = sqlx::query("SELECT COUNT(id) FROM images")
