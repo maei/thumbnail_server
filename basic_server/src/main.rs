@@ -1,7 +1,7 @@
 mod repository;
 mod routes;
 
-use crate::repository::image_reposiotry::ImageRepository;
+use crate::repository::image_repository::ImageRepository;
 use crate::routes::image_routes::image_routes;
 
 use axum::response::Html;
@@ -44,8 +44,4 @@ async fn index_page() -> Html<String> {
     let path = std::path::Path::new("./src/templates/index.html");
     let content = tokio::fs::read_to_string(&path).await.unwrap();
     Html(content)
-}
-
-async fn test() -> String {
-    "".to_string()
 }

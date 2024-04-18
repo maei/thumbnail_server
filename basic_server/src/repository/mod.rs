@@ -1,2 +1,1 @@
-pub mod image_reposiotry;
-// pub use repository::ImageRepository;
+pub mod image_repository;
