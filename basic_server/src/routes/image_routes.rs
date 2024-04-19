@@ -1,4 +1,5 @@
 use crate::repository::image_repository::ImageRepository;
+use anyhow::{Context, Result};
 use axum::extract::multipart::Field;
 use axum::extract::{Multipart, State};
 use axum::response::{Html, IntoResponse};
@@ -7,13 +8,14 @@ use axum::Router;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 use std::sync::Arc;
+use tokio::fs;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 
 pub fn image_routes<T: ImageRepository>(repository: Arc<T>) -> Router {
     Router::new()
         .route("/images/count", get(count_images))
-        .route("/images/upload", post(uploader))
+        .route("/images/upload", post(upload_handler))
         .with_state(repository)
 }
 
@@ -21,9 +23,70 @@ async fn count_images<T: ImageRepository>(State(repo): State<Arc<T>>) -> String 
     repo.count_images().await
 }
 
-async fn insert_image_into_db<T: ImageRepository>(State(repo): State<Arc<T>>) {}
+async fn insert_image_into_db<T: ImageRepository>(repo: Arc<T>, tags: &str) -> Result<i64> {
+    repo.insert_image(tags).await
+}
 
-async fn uploader(mut multipart: Multipart) -> impl IntoResponse {
+async fn store_image(file_name: &str, data: &[u8]) -> Result<()> {
+    let file_path = Path::new("../images/").join(file_name);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(&file_path)
+        .await
+        .context("Failed to open file for writing")?;
+    file.write_all(data)
+        .await
+        .context("Failed to write data to file")
+}
+
+async fn upload_handler<T: ImageRepository>(
+    State(repo): State<Arc<T>>,
+    mut multipart: Multipart,
+) -> Html<String> {
+    let mut tags = None;
+    let mut image_data = None;
+    let mut file_name: Option<String> = None;
+
+    while let Ok(Some(mut field)) = multipart.next_field().await {
+        match field.name() {
+            Some("tags") => {
+                let bytes = field.bytes().await.expect("Failed to read bytes for tags");
+                tags = Some(
+                    String::from_utf8(bytes.to_vec()).expect("Failed to decode tags from UTF-8"),
+                );
+            }
+            Some("file") => {
+                file_name = field.file_name().map(|s| s.to_string());
+                let bytes = field.bytes().await.expect("Failed to read bytes for files");
+                image_data = Some(bytes.to_vec());
+            }
+            _ => eprintln!("Unsupported field received"),
+        }
+    }
+
+    if let (Some(tags), Some(image), Some(file_name)) = (tags, image_data, file_name) {
+        let id = insert_image_into_db(repo, tags.as_str()).await.unwrap();
+        println!("id is {}", id);
+        store_image(&file_name, &image)
+            .await
+            .expect("error while storing file");
+    }
+
+    let path_success = Path::new("./src/templates/upload.html");
+    let path_error = Path::new("./src/templates/upload_error.html");
+
+    match fs::read_to_string(&path_success).await {
+        Ok(content) => Html(content),
+        Err(_) => {
+            println!("success html not found");
+            let content = fs::read_to_string(&path_error).await.unwrap();
+            Html(content)
+        }
+    }
+}
+
+async fn uploader_chunks(mut multipart: Multipart) -> impl IntoResponse {
     let mut tags = None;
     let mut image = None;
 
@@ -48,9 +111,8 @@ async fn uploader(mut multipart: Multipart) -> impl IntoResponse {
                         .append(true)
                         .create(true)
                         .open(&file_path)
-                        .await.expect("sadad");
-
-
+                        .await
+                        .expect("sadad");
 
                     let mut total_bytes = 0usize;
                     while let Ok(Some(chunk)) = field.chunk().await {

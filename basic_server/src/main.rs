@@ -12,6 +12,7 @@ use futures::SinkExt;
 use sqlx::{Pool, Row, Sqlite};
 use std::sync::Arc;
 
+#[derive(Clone)]
 struct AppState {
     db_pool: Pool<Sqlite>,
 }
