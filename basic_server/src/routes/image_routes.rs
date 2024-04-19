@@ -1,21 +1,29 @@
-use crate::repository::image_repository::ImageRepository;
-use anyhow::{Context, Result};
-use axum::extract::multipart::Field;
-use axum::extract::{Multipart, State};
-use axum::response::{Html, IntoResponse};
-use axum::routing::{get, post};
-use axum::Router;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 use std::sync::Arc;
-use tokio::fs;
-use tokio::fs::OpenOptions;
+
+use anyhow::{Context, Result};
+use axum::body::Body;
+use axum::extract::Path as Path2;
+use axum::http::{header, HeaderMap};
+use axum::response::Response;
+use axum::{
+    extract::{multipart::Field, Multipart, State},
+    response::{Html, IntoResponse},
+    routing::{get, post},
+    Router,
+};
+use tokio::fs::{self, read_to_string, File, OpenOptions};
 use tokio::io::AsyncWriteExt;
+use tokio_util::io::ReaderStream;
+
+use crate::repository::image_repository::ImageRepository;
 
 pub fn image_routes<T: ImageRepository>(repository: Arc<T>) -> Router {
     Router::new()
         .route("/images/count", get(count_images))
         .route("/images/upload", post(upload_handler))
+        .route("/images/:id", get(get_image))
         .with_state(repository)
 }
 
@@ -27,8 +35,8 @@ async fn insert_image_into_db<T: ImageRepository>(repo: Arc<T>, tags: &str) -> R
     repo.insert_image(tags).await
 }
 
-async fn store_image(file_name: &str, data: &[u8]) -> Result<()> {
-    let file_path = Path::new("../images/").join(file_name);
+async fn store_image(image_id: i64, data: &[u8]) -> Result<()> {
+    let file_path = Path::new("../images/").join(format!("{image_id}.jpg"));
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
@@ -40,13 +48,42 @@ async fn store_image(file_name: &str, data: &[u8]) -> Result<()> {
         .context("Failed to write data to file")
 }
 
+async fn get_image(Path2(id): Path2<i64>) -> impl IntoResponse {
+    let filename = format!("../images/{id}.jpg");
+    let attachment = format!("filename={filename}");
+
+    let path_error = Path::new("./src/templates/file_not_found.html");
+
+    match File::open(&filename).await {
+        Ok(file) => {
+            let reader = ReaderStream::new(file);
+            let stream_body = Body::from_stream(reader);
+            Response::builder()
+                .header(
+                    header::CONTENT_TYPE,
+                    header::HeaderValue::from_static("image/jpeg"),
+                )
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    header::HeaderValue::from_str(&attachment).unwrap(),
+                )
+                .body(stream_body)
+                .unwrap_or_else(|_| Response::default())
+        }
+        Err(_) => match read_to_string(&path_error).await {
+            Ok(content) => Html(content).into_response(),
+            Err(_) => Html("Error page not found.".to_string()).into_response(),
+        },
+    }
+}
+
 async fn upload_handler<T: ImageRepository>(
     State(repo): State<Arc<T>>,
     mut multipart: Multipart,
 ) -> Html<String> {
     let mut tags = None;
     let mut image_data = None;
-    let mut file_name: Option<String> = None;
+    //let mut file_name: Option<String> = None;
 
     while let Ok(Some(mut field)) = multipart.next_field().await {
         match field.name() {
@@ -57,7 +94,7 @@ async fn upload_handler<T: ImageRepository>(
                 );
             }
             Some("file") => {
-                file_name = field.file_name().map(|s| s.to_string());
+                //file_name = field.file_name().map(|s| s.to_string());
                 let bytes = field.bytes().await.expect("Failed to read bytes for files");
                 image_data = Some(bytes.to_vec());
             }
@@ -65,10 +102,11 @@ async fn upload_handler<T: ImageRepository>(
         }
     }
 
-    if let (Some(tags), Some(image), Some(file_name)) = (tags, image_data, file_name) {
-        let id = insert_image_into_db(repo, tags.as_str()).await.unwrap();
-        println!("id is {}", id);
-        store_image(&file_name, &image)
+    if let (Some(tags), Some(image)) = (tags, image_data) {
+        let image_id = insert_image_into_db(repo, &tags).await.unwrap();
+        println!("id is {}", image_id);
+
+        store_image(image_id, &image)
             .await
             .expect("error while storing file");
     }

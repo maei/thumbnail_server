@@ -20,7 +20,11 @@ impl ImageRepository for AppState {
         format!("{count} images in the database")
     }
 
-    async fn insert_image(&self, tags: &str) -> anyhow::Result<i64> {
-        Ok(1)
+    async fn insert_image(&self, tags: &str) -> Result<i64> {
+        let row = sqlx::query("INSERT INTO images (tags) VALUES (?) RETURNING id")
+            .bind(tags)
+            .fetch_one(&self.db_pool)
+            .await?;
+        Ok(row.get(0))
     }
 }

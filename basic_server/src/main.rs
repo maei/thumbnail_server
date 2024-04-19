@@ -1,16 +1,19 @@
 mod repository;
 mod routes;
+mod service;
 
-use crate::repository::image_repository::ImageRepository;
-use crate::routes::image_routes::image_routes;
+use std::sync::Arc;
 
-use axum::response::Html;
-use axum::routing::{get, post};
-use axum::Router;
+use axum::{
+    response::Html,
+    routing::{get, post},
+    Router,
+};
 use dotenv;
 use futures::SinkExt;
 use sqlx::{Pool, Row, Sqlite};
-use std::sync::Arc;
+
+use crate::{repository::image_repository::ImageRepository, routes::image_routes::image_routes};
 
 #[derive(Clone)]
 struct AppState {
