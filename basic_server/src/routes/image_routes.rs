@@ -1,11 +1,12 @@
 use std::fmt::{Display, Formatter};
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::body::Body;
 use axum::extract::Path as Path2;
-use axum::http::{header, HeaderMap};
+use axum::http::{header, StatusCode};
 use axum::response::Response;
 use axum::{
     extract::{multipart::Field, Multipart, State},
@@ -13,7 +14,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use tokio::fs::{self, read_to_string, File, OpenOptions};
+use tokio::fs::{read_to_string, File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 
@@ -52,8 +53,6 @@ async fn get_image(Path2(id): Path2<i64>) -> impl IntoResponse {
     let filename = format!("../images/{id}.jpg");
     let attachment = format!("filename={filename}");
 
-    let path_error = Path::new("./src/templates/file_not_found.html");
-
     match File::open(&filename).await {
         Ok(file) => {
             let reader = ReaderStream::new(file);
@@ -70,11 +69,51 @@ async fn get_image(Path2(id): Path2<i64>) -> impl IntoResponse {
                 .body(stream_body)
                 .unwrap_or_else(|_| Response::default())
         }
-        Err(_) => match read_to_string(&path_error).await {
-            Ok(content) => Html(content).into_response(),
-            Err(_) => Html("Error page not found.".to_string()).into_response(),
-        },
+        Err(_) => not_found().await,
     }
+}
+
+async fn not_found() -> Response<Body> {
+    let path_error = Path::new("./src/templates/file_not_found.html");
+    match read_to_string(&path_error).await {
+        Ok(content) => Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header("Content-Type", "text/html; charset=utf-8")
+            .body(Body::from(content))
+            .unwrap(),
+        Err(_) => Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header("Content-Type", "text/html; charset=utf-8")
+            .body(Body::from("Error page not found."))
+            .unwrap(),
+    }
+}
+
+fn make_thumbnail(id: i64) -> Result<()> {
+    let file_path = Path::new("../images/").join(format!("{id}.jpg"));
+    let thumbnail_path = Path::new("../images/").join(format!("{id}_thumbnail.jpg"));
+    let mut file = std::fs::File::open(file_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    let image = if let Ok(format) = image::guess_format(&buffer) {
+        image::load_from_memory_with_format(&buffer, format)?
+    } else {
+        image::load_from_memory(&buffer)?
+    };
+
+    let thumbnail = image.thumbnail(100, 100);
+    thumbnail.save(thumbnail_path)?;
+    // Do it directly with the image crate
+    // let image = image::open(file_path);
+    // image.unwrap().thumbnail(100,100);
+    Ok(())
+}
+
+pub async fn fill_missing_thumbnails<T: ImageRepository>(repo: Arc<T>) -> Result<()> {
+    let images = repo.create_thumbnails(make_thumbnail).await?;
+    repo.update_images(images).await?;
+    Ok(())
 }
 
 async fn upload_handler<T: ImageRepository>(
@@ -114,11 +153,10 @@ async fn upload_handler<T: ImageRepository>(
     let path_success = Path::new("./src/templates/upload.html");
     let path_error = Path::new("./src/templates/upload_error.html");
 
-    match fs::read_to_string(&path_success).await {
+    match read_to_string(&path_success).await {
         Ok(content) => Html(content),
         Err(_) => {
-            println!("success html not found");
-            let content = fs::read_to_string(&path_error).await.unwrap();
+            let content = read_to_string(&path_error).await.unwrap();
             Html(content)
         }
     }

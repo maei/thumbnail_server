@@ -10,9 +10,9 @@ use axum::{
     Router,
 };
 use dotenv;
-use futures::SinkExt;
 use sqlx::{Pool, Row, Sqlite};
 
+use crate::routes::image_routes::fill_missing_thumbnails;
 use crate::{repository::image_repository::ImageRepository, routes::image_routes::image_routes};
 
 #[derive(Clone)]
@@ -37,6 +37,8 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(index_page))
         .merge(image_routes(app_state.clone()));
+
+    fill_missing_thumbnails(app_state.clone()).await?;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     axum::serve(listener, app).await.unwrap();
