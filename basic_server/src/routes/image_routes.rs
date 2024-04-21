@@ -91,8 +91,6 @@ async fn not_found() -> Response<Body> {
 }
 
 pub async fn fill_missing_thumbnails<T: ImageRepository>(repo: Arc<T>) -> Result<()> {
-
-
     let image_filter = ImageFilter {
         id: None,
         tags: None,
@@ -126,21 +124,20 @@ pub async fn fill_missing_thumbnails<T: ImageRepository>(repo: Arc<T>) -> Result
     }
 
     for (id, handle) in handles {
-        match handle.await {
+        match handle.await? {
             Ok(_) => println!("Thumbnail created successfully for ID {}", id),
             Err(e) => {
+                // Use downcast here
                 if let Some(thumbnail_error) = e.downcast_ref::<ThumbnailError>() {
                     match thumbnail_error {
-                        ThumbnailError::NotFound(text) => {
-                            println!("File not found: {}, delete it from db...", text);
+                        ThumbnailError::NotFound(_) => {
+                            println!("File not found, deleting from DB...");
                             to_delete.push(id);
                         }
-                        ThumbnailError::Processing(text) => {
-                            println!("Processing error: {}", text)
-                        }
+                        ThumbnailError::Processing(msg) => println!("Processing error: {}", msg),
                     }
                 } else {
-                    println!("Unhandled error type");
+                    println!("Unhandled error type.");
                 }
             }
         }
