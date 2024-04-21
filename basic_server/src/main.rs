@@ -4,16 +4,11 @@ mod service;
 
 use std::sync::Arc;
 
-use axum::{
-    response::Html,
-    routing::{get, post},
-    Router,
-};
+use axum::{response::Html, routing::get, Router};
 use dotenv;
-use sqlx::{Pool, Row, Sqlite};
+use sqlx::{Pool, Sqlite};
 
-use crate::routes::image_routes::fill_missing_thumbnails;
-use crate::{repository::image_repository::ImageRepository, routes::image_routes::image_routes};
+use crate::routes::image_routes::{fill_missing_thumbnails, image_routes};
 
 #[derive(Clone)]
 struct AppState {

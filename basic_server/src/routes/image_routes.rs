@@ -1,5 +1,4 @@
 use std::fmt::{Display, Formatter};
-use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -14,11 +13,13 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use thumbnail::{Thumbnail, ThumbnailError};
 use tokio::fs::{read_to_string, File, OpenOptions};
 use tokio::io::AsyncWriteExt;
+use tokio::task::spawn_blocking;
 use tokio_util::io::ReaderStream;
 
-use crate::repository::image_repository::ImageRepository;
+use crate::repository::image_repository::{ImageFilter, ImageRepository, ImageResult};
 
 pub fn image_routes<T: ImageRepository>(repository: Arc<T>) -> Router {
     Router::new()
@@ -29,11 +30,11 @@ pub fn image_routes<T: ImageRepository>(repository: Arc<T>) -> Router {
 }
 
 async fn count_images<T: ImageRepository>(State(repo): State<Arc<T>>) -> String {
-    repo.count_images().await
+    repo.count().await
 }
 
 async fn insert_image_into_db<T: ImageRepository>(repo: Arc<T>, tags: &str) -> Result<i64> {
-    repo.insert_image(tags).await
+    repo.insert(tags).await
 }
 
 async fn store_image(image_id: i64, data: &[u8]) -> Result<()> {
@@ -89,30 +90,75 @@ async fn not_found() -> Response<Body> {
     }
 }
 
-fn make_thumbnail(id: i64) -> Result<()> {
-    let file_path = Path::new("../images/").join(format!("{id}.jpg"));
-    let thumbnail_path = Path::new("../images/").join(format!("{id}_thumbnail.jpg"));
-    let mut file = std::fs::File::open(file_path)?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
+pub async fn fill_missing_thumbnails<T: ImageRepository>(repo: Arc<T>) -> Result<()> {
 
-    let image = if let Ok(format) = image::guess_format(&buffer) {
-        image::load_from_memory_with_format(&buffer, format)?
-    } else {
-        image::load_from_memory(&buffer)?
+
+    let image_filter = ImageFilter {
+        id: None,
+        tags: None,
+        thumbnail: Some(false),
     };
 
-    let thumbnail = image.thumbnail(100, 100);
-    thumbnail.save(thumbnail_path)?;
-    // Do it directly with the image crate
-    // let image = image::open(file_path);
-    // image.unwrap().thumbnail(100,100);
-    Ok(())
-}
+    let images = match repo.filter(image_filter).await? {
+        ImageResult::Multiple(images) => images,
+        _ => Vec::new(),
+    };
 
-pub async fn fill_missing_thumbnails<T: ImageRepository>(repo: Arc<T>) -> Result<()> {
-    let images = repo.create_thumbnails(make_thumbnail).await?;
-    repo.update_images(images).await?;
+    if images.is_empty() {
+        println!("nothing to update");
+        return Ok(());
+    }
+
+    let mut handles = Vec::with_capacity(images.len());
+    let mut to_delete: Vec<i64> = Vec::new();
+
+    for image in &images {
+        let id = image.id;
+        let handle = spawn_blocking(move || {
+            let file_path = Path::new("../images/").join(format!("{id}.jpg"));
+            let thumbnail_path = Path::new("../images/").join(format!("{id}_thumbnail.jpg"));
+            match Thumbnail::make_thumbnail(file_path, thumbnail_path) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            }
+        });
+        handles.push((id, handle));
+    }
+
+    for (id, handle) in handles {
+        match handle.await {
+            Ok(_) => println!("Thumbnail created successfully for ID {}", id),
+            Err(e) => {
+                if let Some(thumbnail_error) = e.downcast_ref::<ThumbnailError>() {
+                    match thumbnail_error {
+                        ThumbnailError::NotFound(text) => {
+                            println!("File not found: {}, delete it from db...", text);
+                            to_delete.push(id);
+                        }
+                        ThumbnailError::Processing(text) => {
+                            println!("Processing error: {}", text)
+                        }
+                    }
+                } else {
+                    println!("Unhandled error type");
+                }
+            }
+        }
+    }
+
+    // TODO if postgres use BULK operations
+    for id in &to_delete {
+        match repo.delete(*id).await {
+            Ok(_) => {
+                println!("Image {id} deleted successfully.");
+            }
+            Err(e) => {
+                eprintln!("Failed to delete image {id}: {e}. Will attempt to delete later.");
+                // push the id back to a retry queue or log it to a file/database for later retry.
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -124,7 +170,7 @@ async fn upload_handler<T: ImageRepository>(
     let mut image_data = None;
     //let mut file_name: Option<String> = None;
 
-    while let Ok(Some(mut field)) = multipart.next_field().await {
+    while let Ok(Some(field)) = multipart.next_field().await {
         match field.name() {
             Some("tags") => {
                 let bytes = field.bytes().await.expect("Failed to read bytes for tags");
