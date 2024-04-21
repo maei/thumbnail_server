@@ -99,7 +99,7 @@ pub async fn fill_missing_thumbnails<T: ImageRepository>(repo: Arc<T>) -> Result
 
     let images = match repo.filter(image_filter).await? {
         ImageResult::Multiple(images) => images,
-        _ => Vec::new(),
+        _ => Vec::with_capacity(0),
     };
 
     if images.is_empty() {
@@ -127,7 +127,6 @@ pub async fn fill_missing_thumbnails<T: ImageRepository>(repo: Arc<T>) -> Result
         match handle.await? {
             Ok(_) => println!("Thumbnail created successfully for ID {}", id),
             Err(e) => {
-                // Use downcast here
                 if let Some(thumbnail_error) = e.downcast_ref::<ThumbnailError>() {
                     match thumbnail_error {
                         ThumbnailError::NotFound(_) => {
