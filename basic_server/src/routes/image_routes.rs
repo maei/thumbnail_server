@@ -11,7 +11,7 @@ use axum::{
     extract::{multipart::Field, Multipart, State},
     response::{Html, IntoResponse},
     routing::{get, post},
-    Router,
+    Json, Router,
 };
 use thumbnail::{Thumbnail, ThumbnailError};
 use tokio::fs::{read_to_string, File, OpenOptions};
@@ -19,13 +19,18 @@ use tokio::io::AsyncWriteExt;
 use tokio::task::spawn_blocking;
 use tokio_util::io::ReaderStream;
 
-use crate::repository::image_repository::{ImageFilter, ImageRepository, ImageResult};
+use crate::repository::image_repository::{Image, ImageFilter, ImageRepository, ImageResult};
+
+const CONTENT_TYPE_JPEG: &str = "image/jpeg";
+const CONTENT_TYPE_HTML: &str = "text/html; charset=utf-8";
 
 pub fn image_routes<T: ImageRepository>(repository: Arc<T>) -> Router {
     Router::new()
         .route("/images/count", get(count_images))
         .route("/images/upload", post(upload_handler))
         .route("/images/:id", get(get_image))
+        .route("/images", get(show_images))
+        .route("/thumbnails/:id", get(get_thumbnail))
         .with_state(repository)
 }
 
@@ -50,10 +55,18 @@ async fn store_image(image_id: i64, data: &[u8]) -> Result<()> {
         .context("Failed to write data to file")
 }
 
+async fn get_thumbnail(Path2(id): Path2<i64>) -> impl IntoResponse {
+    let filename = format!("../images/{id}_thumbnail.jpg");
+    let attachment = format!("filename={filename}");
+    open_file(filename, attachment).await
+}
 async fn get_image(Path2(id): Path2<i64>) -> impl IntoResponse {
     let filename = format!("../images/{id}.jpg");
     let attachment = format!("filename={filename}");
+    open_file(filename, attachment).await
+}
 
+async fn open_file(filename: String, attachment: String) -> impl IntoResponse {
     match File::open(&filename).await {
         Ok(file) => {
             let reader = ReaderStream::new(file);
@@ -110,6 +123,8 @@ pub async fn fill_missing_thumbnails<T: ImageRepository>(repo: Arc<T>) -> Result
     let mut handles = Vec::with_capacity(images.len());
     let mut to_delete: Vec<i64> = Vec::new();
 
+    // Todo UPDATE image THUMBNAIL = 1
+    // ATM every time the app starts it wants to create thumbnails
     for image in &images {
         let id = image.id;
         let handle = spawn_blocking(move || {
@@ -187,9 +202,19 @@ async fn upload_handler<T: ImageRepository>(
         let image_id = insert_image_into_db(repo, &tags).await.unwrap();
         println!("id is {}", image_id);
 
-        store_image(image_id, &image)
+        store_image(image_id.clone(), &image)
             .await
             .expect("error while storing file");
+
+        spawn_blocking(move || {
+            let image_id = image_id.clone();
+            let file_path = Path::new("../images/").join(format!("{image_id}.jpg"));
+            let thumbnail_path = Path::new("../images/").join(format!("{image_id}_thumbnail.jpg"));
+            match Thumbnail::make_thumbnail(file_path, thumbnail_path) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            }
+        });
     }
 
     let path_success = Path::new("./src/templates/upload.html");
@@ -201,6 +226,20 @@ async fn upload_handler<T: ImageRepository>(
             let content = read_to_string(&path_error).await.unwrap();
             Html(content)
         }
+    }
+}
+
+async fn show_images<T: ImageRepository>(State(repo): State<Arc<T>>) -> Json<Vec<Image>> {
+    let filter = ImageFilter {
+        id: None,
+        tags: None,
+        thumbnail: None,
+    };
+    let images: Result<ImageResult> = repo.filter(filter).await;
+    match images {
+        Ok(ImageResult::Single(single_result)) => Json(vec![single_result]),
+        Ok(ImageResult::Multiple(images)) => Json(images),
+        _ => Json(vec![]),
     }
 }
 

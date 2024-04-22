@@ -15,3 +15,21 @@
     </form>
 </body>
 </html>
+<script>
+    async function getImages() {
+        const response = await fetch('/images');
+        const images = await response.json();
+
+        let html = "";
+        for (let i=0; i<images.length; i++) {
+            html += "<div>" + images[i].tags + "<br />";
+            html += "<a href='/images/" + images[i].id + "'>";
+            html += "<img src='/thumbnails/" + images[i].id + "' />";
+            html += "</a></div>";
+
+        }
+        document.getElementById("thumbnails").innerHTML = html;
+    }
+
+    getImages();
+</script>

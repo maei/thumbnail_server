@@ -1,10 +1,11 @@
 use crate::AppState;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteArguments;
 use sqlx::{Arguments, Row};
 
-#[derive(sqlx::FromRow, Debug, PartialEq, Eq, Clone)]
+#[derive(sqlx::FromRow, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 pub struct Image {
     pub(crate) id: i64,
     pub tags: String,
