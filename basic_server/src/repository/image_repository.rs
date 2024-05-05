@@ -12,6 +12,16 @@ pub struct Image {
     pub thumbnail: bool,
 }
 
+impl Image {
+    pub fn new(id: i64, tags: String, thumbnail: bool) -> Self {
+        Self {
+            id,
+            tags,
+            thumbnail,
+        }
+    }
+}
+
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct ImageFilter {
     pub id: Option<i64>,

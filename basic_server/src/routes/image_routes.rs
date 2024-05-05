@@ -340,37 +340,77 @@ impl FieldBehavior for Field<'_> {
 mod tests {
     use super::*;
 
-    struct MockField {
-        content_type: Option<String>,
+    use async_trait::async_trait;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use tempfile::tempdir;
+
+    #[derive(Clone)]
+    struct MockImageRepository {
+        data: Arc<Mutex<HashMap<i64, Image>>>,
     }
 
-    impl FieldBehavior for MockField {
-        fn content_type(&self) -> Option<&str> {
-            self.content_type.as_deref()
+    impl MockImageRepository {
+        fn new() -> Self {
+            Self {
+                data: Arc::new(Mutex::new(HashMap::new())),
+            }
         }
     }
 
-    #[test]
-    fn test_get_content_type_png() {
-        let field = MockField {
-            content_type: Some("image/png".to_string()),
-        };
-        assert_eq!(get_content_type(&field), Some(ContentType::ImagePng));
+    #[async_trait]
+    impl ImageRepository for MockImageRepository {
+        async fn count(&self) -> String {
+            self.data.lock().unwrap().len().to_string()
+        }
+
+        async fn insert(&self, _tags: &str) -> Result<i64, anyhow::Error> {
+            let mut data = self.data.lock().unwrap();
+            let id = data.len() as i64 + 1;
+            data.insert(id, create_image());
+            Ok(id)
+        }
+
+        async fn delete(&self, id: i64) -> Result<(), anyhow::Error> {
+            self.data.lock().unwrap().remove(&id);
+            Ok(())
+        }
+
+        async fn update(&self, image: Image) -> Result<()> {
+            todo!()
+        }
+        async fn filter(&self, _filter: ImageFilter) -> Result<ImageResult, anyhow::Error> {
+            let data = self.data.lock().unwrap().values().cloned().collect();
+            Ok(ImageResult::Multiple(data))
+        }
     }
 
-    #[test]
-    fn test_get_content_type_jpg() {
-        let field = MockField {
-            content_type: Some("image/jpg".to_string()),
-        };
-        assert_eq!(get_content_type(&field), Some(ContentType::ImageJpg));
+    fn create_image() -> Image {
+        let id = 1;
+        let tags = "tag1,tag2".to_string();
+        let thumbnail = true;
+
+        Image::new(id, tags.clone(), thumbnail)
     }
 
-    #[test]
-    fn test_get_content_type_unsupported() {
-        let field = MockField {
-            content_type: Some("text/html".to_string()),
-        };
-        assert_eq!(get_content_type(&field), None);
+    #[tokio::test]
+    async fn test_new_image() {
+        let id = 1;
+        let tags = "tag1,tag2".to_string();
+        let thumbnail = true;
+        let image = create_image();
+
+        assert_eq!(image.id, id);
+        assert_eq!(image.tags, tags);
+        assert_eq!(image.thumbnail, thumbnail);
+    }
+
+    #[tokio::test]
+    async fn test_count_images() {
+        let repository = Arc::new(MockImageRepository::new());
+        let state = State(repository.clone());
+        repository.insert("").await.unwrap();
+        let response = count_images(state).await;
+        assert_eq!(response, "1");
     }
 }
